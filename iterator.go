@@ -2,12 +2,14 @@ package cvdb
 
 import "encoding/binary"
 
+// Iterator wraps an object
 type Iterator struct {
-	r   *Reader
-	tbl int
-	idx uint32
-	err error
-	buf []byte
+	KeysOnly bool // you can set keysonly to true if you don't care about the values when iterating
+	r        *Reader
+	tbl      int
+	idx      uint32
+	err      error
+	buf      []byte
 }
 
 func (r *Reader) Iterator() *Iterator {
@@ -44,7 +46,10 @@ again:
 			return nil, nil
 		}
 		kl := binary.LittleEndian.Uint32(scratch[:4])
-		vl := binary.LittleEndian.Uint32(scratch[4:])
+		var vl uint32
+		if !it.KeysOnly {
+			vl = binary.LittleEndian.Uint32(scratch[4:])
+		}
 		bl := int(kl) + int(vl)
 		if cap(it.buf) < bl {
 			it.buf = make([]byte, bl)

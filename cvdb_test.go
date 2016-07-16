@@ -96,6 +96,33 @@ func TestIterate001(t *testing.T) {
 	db.Close()
 }
 
+func TestIterateKeysOnly001(t *testing.T) {
+	tstart := time.Now()
+	db, err := OpenOpts(dbname, &opts)
+	if err != nil {
+		t.Fatalf("error in open: %v", err)
+	}
+	iter := db.Iterator()
+	iter.KeysOnly = true
+	cnt := 0
+	for k, _ := iter.First(); k != nil; k, _ = iter.Next() {
+		ks := string(k)
+		if !strings.HasPrefix(ks, "test-") && !strings.HasSuffix(ks, "-test") {
+			t.Fatalf("invalid key %v (len %v)", ks, len(k))
+		}
+		cnt++
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("iterator error %v", err)
+	}
+	if cnt != numkeys {
+		t.Errorf("iterator returned %v keys (%v) expected", cnt, numkeys)
+	}
+	dura := time.Since(tstart)
+	fmt.Printf("keysonly  %v keys in %v (%v/key)\n", numkeys, dura, dura/numkeys)
+	db.Close()
+}
+
 var sV = sv()
 
 func sv() []byte {
