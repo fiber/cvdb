@@ -44,10 +44,10 @@ func TestRead001(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error in open: %v", err)
 	}
-	buffer := make([]byte, 2028)
+	db.SetBufferSize(2048)
 	for i := 0; i < numkeys; i++ {
 		ks := "test-" + strconv.FormatInt(int64(i), 36) + "-test"
-		val, err := db.GetBuffer([]byte(ks), buffer)
+		val, err := db.Get([]byte(ks))
 		if err != nil {
 			t.Fatalf("read error %v", err)
 		}
@@ -72,9 +72,11 @@ func TestIterate001(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error in open: %v", err)
 	}
-	iter := db.Iterator()
 	cnt := 0
-	for k, v := iter.First(); k != nil; k, v = iter.Next() {
+	iter := db.Iterator()
+	for iter.Next() {
+		k := iter.Key()
+		v := iter.Value()
 		ks := string(k)
 		if !strings.HasPrefix(ks, "test-") && !strings.HasSuffix(ks, "-test") {
 			t.Fatalf("invalid key %v (len %v) - value %v", ks, len(k), string(v))
@@ -105,7 +107,8 @@ func TestIterateKeysOnly001(t *testing.T) {
 	iter := db.Iterator()
 	iter.KeysOnly = true
 	cnt := 0
-	for k, _ := iter.First(); k != nil; k, _ = iter.Next() {
+	for iter.Next() {
+		k := iter.Key()
 		ks := string(k)
 		if !strings.HasPrefix(ks, "test-") && !strings.HasSuffix(ks, "-test") {
 			t.Fatalf("invalid key %v (len %v)", ks, len(k))
