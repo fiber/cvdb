@@ -170,13 +170,13 @@ func (w *Writer) Commit() error {
 	buf := w.scratch[:12]
 	w.committed = true
 	trailer := w.p
-	for i := range w.buckets {
-		if len(w.buckets[i]) == 0 {
+	for i, wi := range w.buckets {
+		if len(wi) == 0 {
 			continue
 		}
-		cells := make([]cell, len(w.buckets[i])*2)
-		for _, b := range w.buckets[i] {
-			p := int((2 * (b.hash / w.numBuckets)) % uint32(len(cells)))
+		cells := make([]cell, len(wi)*ScaleFactor)
+		for _, b := range wi {
+			p := startPos(b.hash, w.numBuckets, len(cells))
 			for cells[p].hash != 0 {
 				p = (p + 1) % len(cells)
 				w.skipped++
@@ -210,7 +210,7 @@ func (w *Writer) Commit() error {
 	// update the header
 	bp := w.offset
 	for _, b := range w.buckets {
-		if nc := uint32(len(b)) * 2; nc == 0 {
+		if nc := uint32(len(b)) * ScaleFactor; nc == 0 {
 			for i := range buf[:12] {
 				buf[i] = 0
 			}

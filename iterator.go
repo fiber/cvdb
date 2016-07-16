@@ -14,11 +14,11 @@ type Iterator struct {
 	idx      uint32
 	err      error
 	//
-	pos       int64
-	hash      uint32
-	kl        int
-	vl        int64
-	readValue bool
+	pos  int64
+	hash uint32
+	kl   int
+	vl   int64
+	lazy bool
 }
 
 // Iterator allows to scan all key-value pairs in the database.
@@ -26,8 +26,8 @@ func (r *Reader) Iterator() *Iterator {
 	return &Iterator{r: r.Clone()}
 }
 
-func (it *Iterator) next(readValue bool) bool {
-	it.readValue = readValue
+func (it *Iterator) next(lazy bool) bool {
+	it.lazy = lazy
 	var scratch [16]byte
 	for {
 		if it.err != nil || it.tbl == int(it.r.numBuckets) {
@@ -66,10 +66,10 @@ func (it *Iterator) next(readValue bool) bool {
 			}
 			it.kl = int(kl)
 			it.vl = int64(vl)
-			if !readValue {
+			if lazy {
 				if vl < 128*1024 {
 					it.r.grow(int(kl) + int(vl))
-					it.readValue = true
+					it.lazy = false
 				} else {
 					it.r.grow(int(kl))
 				}
@@ -113,7 +113,7 @@ func (it *Iterator) Key() []byte {
 }
 
 func (it *Iterator) Value() []byte {
-	if it.readValue {
+	if !it.lazy {
 		return it.r.buf[it.kl:]
 	}
 	var b bytes.Buffer

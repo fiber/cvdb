@@ -119,7 +119,7 @@ func (r *Reader) findKey(hash uint32, key []byte) (kvloc, error) {
 		return kv, nil
 	}
 	fpos := int64(r.index[bucket].pos)
-	start := int((2 * (hash / r.numBuckets)) % uint32(length))
+	start := startPos(hash, r.numBuckets, length)
 	for i := 0; i < length; i++ {
 		spos := fpos + int64((start+i)%length)*12
 		if _, err := r.f.ReadAt(scratch[:12], spos); err != nil {

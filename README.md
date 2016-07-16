@@ -10,8 +10,8 @@ Note that the file format is NOT COMPATIBLE with CDB.
 
 This software is still fairly young. It may have bugs. Use at your own risk.
 
-Fast lookups: A successful lookup in a large database normally takes just two to three disk accesses. An unsuccessful lookup takes only one.
-Low overhead: A database uses 3072 bytes, plus 32 bytes per record, plus the space for keys and data.
+Fast lookups: A successful lookup in a large database normally takes just two or three disk accesses. An unsuccessful lookup takes only one.
+Low overhead: A database uses 3072 bytes, plus 32 bytes per record (36 in largeValue mode), plus the space for keys and data.
 Databases are stored in a machine-independent format.
 
 Fast atomic database replacement: cdbmake can rewrite an entire database two orders of magnitude faster than other hashing packages.
