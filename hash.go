@@ -2,10 +2,6 @@ package cvdb
 
 import "encoding/binary"
 
-var (
-	DefaultHasher = FNV1a
-)
-
 type (
 	Hasher interface {
 		Hash(b []byte) uint32

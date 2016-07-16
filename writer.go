@@ -174,7 +174,7 @@ func (w *Writer) Commit() error {
 		if len(wi) == 0 {
 			continue
 		}
-		cells := make([]cell, len(wi)*ScaleFactor)
+		cells := make([]cell, scaledLength(len(wi)))
 		for _, b := range wi {
 			p := startPos(b.hash, w.numBuckets, len(cells))
 			for cells[p].hash != 0 {
@@ -185,8 +185,8 @@ func (w *Writer) Commit() error {
 		}
 		for _, c := range cells {
 			binary.LittleEndian.PutUint32(buf, c.hash)
-			binary.LittleEndian.PutUint64(buf[HashWidth:], c.pos)
-			if _, err := w.f.WriteAt(buf[:HashWidth+8], w.p); err != nil {
+			binary.LittleEndian.PutUint64(buf[HashBits/8:], c.pos)
+			if _, err := w.f.WriteAt(buf[:HashBits/8+8], w.p); err != nil {
 				w.err = ioerror(err)
 				break
 			}
@@ -210,7 +210,7 @@ func (w *Writer) Commit() error {
 	// update the header
 	bp := w.offset
 	for _, b := range w.buckets {
-		if nc := uint32(len(b)) * ScaleFactor; nc == 0 {
+		if nc := uint32(scaledLength(len(b))); nc == 0 {
 			for i := range buf[:12] {
 				buf[i] = 0
 			}
