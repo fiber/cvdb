@@ -17,6 +17,7 @@ var (
 	errNotCloser     = UserError(errors.New("writer does not support close method"))
 	errInvalidHeader = DBError(errors.New("invalid db header"))
 	errDBCorrupt     = DBError(errors.New("database is corrupt"))
+	ErrValueTooLarge = UserError(errors.New("attempt to read a very large value from DB"))
 )
 
 func ioerror(err error) error {

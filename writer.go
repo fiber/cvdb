@@ -19,6 +19,7 @@ type (
 		err         error
 		scratch     [16]byte
 		skipped     int64
+		largeValues bool // support values larger than 4GB
 		dumpDistrib bool
 	}
 	cell struct {
@@ -36,12 +37,13 @@ func NewWriter(f writeFile, options *Options) (*Writer, error) {
 		return nil, err
 	}
 	w := Writer{
-		f:          f,
-		numBuckets: opts.NumBuckets,
-		offset:     opts.Offset,
-		buckets:    make([][]cell, opts.NumBuckets),
-		p:          int64(opts.NumBuckets)*12 + opts.Offset,
-		hasher:     opts.Hasher,
+		f:           f,
+		numBuckets:  opts.NumBuckets,
+		offset:      opts.Offset,
+		buckets:     make([][]cell, opts.NumBuckets),
+		p:           int64(opts.NumBuckets)*12 + opts.Offset,
+		hasher:      opts.Hasher,
+		largeValues: opts.LargeValues,
 	}
 	return &w, nil
 }
@@ -69,8 +71,12 @@ func (w *Writer) Put(key, value []byte) error {
 	return w.PutHash(hash, key, value)
 }
 
-// PutHash writes key and value to the stream but uses an already precomputed hash value
-func (w *Writer) PutHash(hash uint32, key, value []byte) error {
+func (w *Writer) PutReader(key []byte, valueR io.Reader) error {
+	hash := w.hasher.Hash(key)
+	return w.PutHashReader(hash, key, valueR)
+}
+
+func (w *Writer) putHashStart(hash uint32, key []byte, valuelen int) error {
 	if w.err != nil {
 		return w.err
 	}
@@ -78,25 +84,81 @@ func (w *Writer) PutHash(hash uint32, key, value []byte) error {
 	b := cell{hash: hash, pos: uint64(w.p)}
 	bucket := hash % w.numBuckets
 	w.buckets[bucket] = append(w.buckets[bucket], b)
-	buf := w.scratch[:8]
-	binary.LittleEndian.PutUint32(buf, uint32(len(key)))
-	binary.LittleEndian.PutUint32(buf[keyLen:], uint32(len(value)))
+	var buf []byte
+	if w.largeValues {
+		buf = w.scratch[:12]
+		binary.LittleEndian.PutUint32(buf, uint32(len(key)))
+		binary.LittleEndian.PutUint64(buf[keyLen:], uint64(valuelen))
+	} else {
+		buf = w.scratch[:8]
+		binary.LittleEndian.PutUint32(buf, uint32(len(key)))
+		binary.LittleEndian.PutUint32(buf[keyLen:], uint32(valuelen))
+	}
 	if _, err := w.f.WriteAt(buf, w.p); err != nil {
 		w.err = ioerror(err)
 		return err
 	}
-	w.p += 8
+	w.p += int64(len(buf))
 	if _, err := w.f.WriteAt(key, w.p); err != nil {
 		w.err = ioerror(err)
 		return err
 	}
 	w.p += int64(len(key))
+	return nil
+}
+
+// PutHash writes key and value to the stream but uses an already precomputed hash value
+func (w *Writer) PutHash(hash uint32, key, value []byte) error {
+	if err := w.putHashStart(hash, key, len(value)); err != nil {
+		return err
+	}
 	if _, err := w.f.WriteAt(value, w.p); err != nil {
 		w.err = ioerror(err)
 		return err
 	}
 	w.p += int64(len(value))
 	return w.err
+}
+
+func (w *Writer) PutHashReader(hash uint32, key []byte, valueR io.Reader) error {
+	valpos := w.p + 4
+	if err := w.putHashStart(hash, key, 0); err != nil {
+		return err
+	}
+	valLen, err := io.Copy(poswriter(w, w.p), valueR)
+	if err != nil {
+		w.err = ioerror(err)
+		return w.err
+	}
+	w.p += valLen
+	var buf []byte
+	if w.largeValues {
+		buf = w.scratch[:8]
+		binary.LittleEndian.PutUint64(buf, uint64(valLen))
+	} else {
+		buf = w.scratch[:4]
+		binary.LittleEndian.PutUint32(buf, uint32(valLen))
+	}
+	if _, err := w.f.WriteAt(buf, valpos); err != nil {
+		w.err = ioerror(err)
+		return w.err
+	}
+	return w.err
+}
+
+type posWriter struct {
+	w   *Writer
+	pos int64
+}
+
+func poswriter(w *Writer, pos int64) *posWriter {
+	return &posWriter{w: w, pos: pos}
+}
+
+func (pos *posWriter) Write(b []byte) (int, error) {
+	n, err := pos.w.f.WriteAt(b, pos.pos)
+	pos.pos += int64(n)
+	return n, err
 }
 
 // Commit() must be called to finalizes the database. It writes the seek information

@@ -2,9 +2,10 @@ package cvdb
 
 type (
 	Options struct {
-		NumBuckets uint32
-		Offset     int64
-		Hasher     Hasher
+		NumBuckets  uint32
+		Offset      int64
+		Hasher      Hasher
+		LargeValues bool // support values larger than 4GB
 	}
 )
 

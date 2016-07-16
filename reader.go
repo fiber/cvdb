@@ -9,14 +9,15 @@ import (
 
 type (
 	Reader struct {
-		index      []hentry
-		offset     int64
-		numBuckets uint32
-		hasher     Hasher
-		scratch    [16]byte
-		f          readFile
-		buf        []byte
-		cloned     bool
+		index       []hentry
+		offset      int64
+		numBuckets  uint32
+		hasher      Hasher
+		scratch     [16]byte
+		f           readFile
+		buf         []byte
+		cloned      bool
+		largeValues bool
 	}
 	hentry struct {
 		pos uint64
@@ -32,12 +33,13 @@ type (
 // want to use SetBuffer or SetBufferSize to size the buffer appropriately
 func (r *Reader) Clone() *Reader {
 	r2 := Reader{
-		index:      r.index,
-		offset:     r.offset,
-		numBuckets: r.numBuckets,
-		hasher:     r.hasher,
-		f:          r.f,
-		cloned:     true,
+		index:       r.index,
+		offset:      r.offset,
+		numBuckets:  r.numBuckets,
+		hasher:      r.hasher,
+		f:           r.f,
+		cloned:      true,
+		largeValues: r.largeValues,
 	}
 	return &r2
 }
@@ -49,10 +51,11 @@ func NewReader(f readFile, options *Options) (*Reader, error) {
 		return nil, err
 	}
 	r := Reader{
-		f:          f,
-		offset:     opts.Offset,
-		numBuckets: opts.NumBuckets,
-		hasher:     opts.Hasher,
+		f:           f,
+		offset:      opts.Offset,
+		numBuckets:  opts.NumBuckets,
+		hasher:      opts.Hasher,
+		largeValues: opts.LargeValues,
 	}
 	r.index = make([]hentry, opts.NumBuckets)
 	buf := make([]byte, opts.NumBuckets*12)
@@ -101,7 +104,7 @@ func (r *Reader) Get(key []byte) (value []byte, err error) {
 type kvloc struct {
 	pos int64
 	kl  int
-	vl  int
+	vl  int64
 }
 
 // findKey returns a kvloc object for the given key or an error.
@@ -130,20 +133,27 @@ func (r *Reader) findKey(hash uint32, key []byte) (kvloc, error) {
 		if hash2 != hash {
 			continue
 		}
-		if _, err := r.f.ReadAt(scratch[:8], pos); err != nil {
+		bs := 8
+		if r.largeValues {
+			bs = 12
+		}
+		if _, err := r.f.ReadAt(scratch[:bs], pos); err != nil {
 			return kv, ioerror(err)
 		}
 		keyLen := int(binary.LittleEndian.Uint32(scratch[:4]))
 		if keyLen != len(key) {
 			continue
 		}
-		valLen := int(binary.LittleEndian.Uint32(scratch[4:8]))
-		s := keyLen
-		if valLen > s {
-			s = valLen
+
+		var valLen int64
+		if r.largeValues {
+			valLen = int64(binary.LittleEndian.Uint64(scratch[4:12]))
+		} else {
+			valLen = int64(binary.LittleEndian.Uint32(scratch[4:8]))
 		}
+		s := keyLen
 		r.grow(s)
-		if _, err := r.f.ReadAt(r.buf[:keyLen], pos+8); err != nil {
+		if _, err := r.f.ReadAt(r.buf[:keyLen], pos+int64(bs)); err != nil {
 			return kv, ioerror(err)
 		}
 		if !bytes.Equal(key, r.buf[:keyLen]) {
@@ -187,7 +197,7 @@ func (r *Reader) SetBufferSize(size int) {
 }
 
 // set internal buffer to at least size
-func (r *Reader) grow(size int) {
+func (r *Reader) grow(size int) (moved bool) {
 	if size < 0 {
 		return
 	}
@@ -195,8 +205,10 @@ func (r *Reader) grow(size int) {
 		bs := size
 		bs = bs + 257 - (bs-1)%256 // size to next multiple of 256 bytes
 		r.buf = make([]byte, bs)
+		moved = true
 	}
 	r.buf = r.buf[:size]
+	return
 }
 
 // GetHash returns the value for key or (nil, err) when an error occurs. It is
@@ -209,11 +221,59 @@ func (r *Reader) GetHash(hash uint32, key []byte) (value []byte, err error) {
 	if kv.pos == 0 {
 		return nil, nil
 	}
-	r.grow(kv.vl)
-	if _, err := r.f.ReadAt(r.buf[:kv.vl], kv.pos+8+int64(kv.kl)); err != nil {
+	if kv.vl >= (1<<32 - 1) {
+		return nil, ErrValueTooLarge
+	}
+	bs := int(kv.vl)
+	r.grow(bs)
+	ss := int64(8)
+	if r.largeValues {
+		ss = 12
+	}
+	if _, err := r.f.ReadAt(r.buf[:bs], kv.pos+ss+int64(kv.kl)); err != nil {
 		return nil, ioerror(err)
 	}
-	return r.buf[:kv.vl], nil
+	return r.buf[:bs], nil
+}
+
+func (r *Reader) GetReader(key []byte) (value io.Reader, err error) {
+	hash := r.hasher.Hash(key)
+	return r.GetHashReader(hash, key)
+}
+
+func (r *Reader) GetHashReader(hash uint32, key []byte) (value io.Reader, err error) {
+	kv, err := r.findKey(hash, key)
+	if err != nil {
+		return nil, err
+	}
+	if kv.pos == 0 {
+		return nil, nil
+	}
+	return posReader(r, kv.pos, kv.vl), nil
+}
+
+type posreader struct {
+	r   *Reader
+	pos int64
+	len int64
+}
+
+func posReader(r *Reader, pos int64, len int64) *posreader {
+	return &posreader{r: r, pos: pos, len: len}
+}
+
+func (r *posreader) Read(b []byte) (int, error) {
+	if r.len == 0 {
+		return 0, io.EOF
+	}
+	m := len(b)
+	if r.len < int64(m) {
+		b = b[:int(r.len)]
+	}
+	n, err := r.r.f.ReadAt(b, r.pos)
+	r.pos += int64(n)
+	r.len -= int64(n)
+	return n, err
 }
 
 // Close closes the underlying file. If the database was not committed, it will
