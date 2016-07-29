@@ -113,7 +113,7 @@ func TestIterate2002(t *testing.T) {
 		t.Fatalf("error in open: %v", err)
 	}
 	cnt := 0
-	iter := db.Iterator2()
+	iter := db.IdxIterator()
 	for iter.Next() {
 		k := iter.Key()
 		v := iter.Value()

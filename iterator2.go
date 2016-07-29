@@ -55,12 +55,10 @@ func (it *Iterator2) next(lazy bool) bool {
 	}
 	kl := binary.LittleEndian.Uint32(scratch[:4])
 	var vl uint64
-	if !it.KeysOnly {
-		if bs == 8 {
-			vl = uint64(binary.LittleEndian.Uint32(scratch[4:]))
-		} else {
-			vl = binary.LittleEndian.Uint64(scratch[4:])
-		}
+	if bs == 8 {
+		vl = uint64(binary.LittleEndian.Uint32(scratch[4:]))
+	} else {
+		vl = binary.LittleEndian.Uint64(scratch[4:])
 	}
 	it.kl = int(kl)
 	it.vl = int64(vl)
@@ -76,7 +74,11 @@ func (it *Iterator2) next(lazy bool) bool {
 			it.err = ErrValueTooLarge
 			return false
 		}
-		it.r.scale(int(kl) + int(vl))
+		if !it.KeysOnly {
+			it.r.scale(int(kl) + int(vl))
+		} else {
+			it.r.scale(int(kl))
+		}
 	}
 	if _, err := it.r.f.ReadAt(it.r.buf, it.pos+int64(bs)); err != nil {
 		it.err = ioerror(err)
