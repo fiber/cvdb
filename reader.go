@@ -152,7 +152,7 @@ func (r *Reader) findKey(hash uint32, key []byte) (kvloc, error) {
 			valLen = int64(binary.LittleEndian.Uint32(scratch[4:8]))
 		}
 		s := keyLen
-		r.grow(s)
+		r.scale(s)
 		if _, err := r.f.ReadAt(r.buf[:keyLen], pos+int64(bs)); err != nil {
 			return kv, ioerror(err)
 		}
@@ -193,11 +193,11 @@ func (r *Reader) SetBufferSize(size int) {
 	if cap(r.buf) > 2*size {
 		r.buf = nil
 	}
-	r.grow(size)
+	r.scale(size)
 }
 
 // set internal buffer to at least size
-func (r *Reader) grow(size int) (moved bool) {
+func (r *Reader) scale(size int) (moved bool) {
 	if size < 0 {
 		return
 	}
@@ -225,7 +225,7 @@ func (r *Reader) GetHash(hash uint32, key []byte) (value []byte, err error) {
 		return nil, ErrValueTooLarge
 	}
 	bs := int(kv.vl)
-	r.grow(bs)
+	r.scale(bs)
 	ss := int64(8)
 	if r.largeValues {
 		ss = 12

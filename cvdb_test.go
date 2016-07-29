@@ -106,6 +106,41 @@ func TestIterate001(t *testing.T) {
 	db.Close()
 }
 
+func TestIterate2002(t *testing.T) {
+	tstart := time.Now()
+	db, err := OpenOpts(dbname, &opts)
+	if err != nil {
+		t.Fatalf("error in open: %v", err)
+	}
+	cnt := 0
+	iter := db.Iterator2()
+	for iter.Next() {
+		k := iter.Key()
+		v := iter.Value()
+		ks := string(k)
+		if !strings.HasPrefix(ks, "test-") && !strings.HasSuffix(ks, "-test") {
+			t.Fatalf("invalid key %v (len %v) - value %v", ks, len(k), string(v))
+		}
+		vs := string(v)
+		if int64(len(v)) != iter.vl {
+			t.Fatalf("value length is %v bytes, but returned value has %v", iter.vl, len(v))
+		}
+		if vs != ks {
+			t.Fatalf("invalid value for key %v kl %v vl %v", ks, iter.kl, iter.vl)
+		}
+		cnt++
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("iterator error %v", err)
+	}
+	if cnt != numkeys {
+		t.Errorf("iterator returned %v keys (%v) expected", cnt, numkeys)
+	}
+	dura := time.Since(tstart)
+	fmt.Printf("iter2 %v keys in %v (%v/key)\n", numkeys, dura, dura/numkeys)
+	db.Close()
+}
+
 func TestIterateKeysOnly001(t *testing.T) {
 	tstart := time.Now()
 	db, err := OpenOpts(dbname, &opts)

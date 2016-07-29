@@ -21,8 +21,8 @@ type Iterator struct {
 	lazy bool
 }
 
-// Iterator allows to scan all key-value pairs in the database.
-func (r *Reader) Iterator() *Iterator {
+// IdxIterator allows to scan all key-value pairs in the database. It does so by walking the hash table.
+func (r *Reader) IdxIterator() *Iterator {
 	return &Iterator{r: r.Clone()}
 }
 
@@ -67,18 +67,18 @@ func (it *Iterator) next(lazy bool) bool {
 			it.kl = int(kl)
 			it.vl = int64(vl)
 			if lazy {
-				if vl < 128*1024 {
-					it.r.grow(int(kl) + int(vl))
+				if vl < 2*1024 {
+					it.r.scale(int(kl) + int(vl))
 					it.lazy = false
 				} else {
-					it.r.grow(int(kl))
+					it.r.scale(int(kl))
 				}
 			} else {
 				if vl > 1<<31 {
 					it.err = ErrValueTooLarge
 					return false
 				}
-				it.r.grow(int(kl) + int(vl))
+				it.r.scale(int(kl) + int(vl))
 			}
 			if _, err := it.r.f.ReadAt(it.r.buf, it.pos+int64(bs)); err != nil {
 				it.err = ioerror(err)
