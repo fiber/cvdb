@@ -5,19 +5,23 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 )
 
 type (
 	Writer struct {
-		buckets     [][]cell
-		hasher      Hasher
-		f           writeFile
-		p           int64 // current position in stream
-		offset      int64 // offset to add when seeking
-		committed   bool
-		numBuckets  uint32
-		err         error
-		scratch     [16]byte
+		buckets    [][]cell
+		hasher     Hasher
+		f          writeFile
+		p          int64 // current position in stream
+		offset     int64 // offset to add when seeking
+		committed  bool
+		numBuckets uint32
+		err        error
+		scratch    struct {
+			buf [16]byte
+			sync.Mutex
+		}
 		skipped     int64
 		largeValues bool // support values larger than 4GB
 		dumpDistrib bool
@@ -85,19 +89,22 @@ func (w *Writer) putHashStart(hash uint32, key []byte, valuelen int) error {
 	bucket := hash % w.numBuckets
 	w.buckets[bucket] = append(w.buckets[bucket], b)
 	var buf []byte
+	w.scratch.Lock()
 	if w.largeValues {
-		buf = w.scratch[:12]
+		buf = w.scratch.buf[:12]
 		binary.LittleEndian.PutUint32(buf, uint32(len(key)))
 		binary.LittleEndian.PutUint64(buf[keyLen:], uint64(valuelen))
 	} else {
-		buf = w.scratch[:8]
+		buf = w.scratch.buf[:8]
 		binary.LittleEndian.PutUint32(buf, uint32(len(key)))
 		binary.LittleEndian.PutUint32(buf[keyLen:], uint32(valuelen))
 	}
 	if _, err := w.f.WriteAt(buf, w.p); err != nil {
+		w.scratch.Unlock()
 		w.err = ioerror(err)
 		return err
 	}
+	w.scratch.Unlock()
 	w.p += int64(len(buf))
 	if _, err := w.f.WriteAt(key, w.p); err != nil {
 		w.err = ioerror(err)
@@ -132,17 +139,20 @@ func (w *Writer) PutHashReader(hash uint32, key []byte, valueR io.Reader) error 
 	}
 	w.p += valLen
 	var buf []byte
+	w.scratch.Lock()
 	if w.largeValues {
-		buf = w.scratch[:8]
+		buf = w.scratch.buf[:8]
 		binary.LittleEndian.PutUint64(buf, uint64(valLen))
 	} else {
-		buf = w.scratch[:4]
+		buf = w.scratch.buf[:4]
 		binary.LittleEndian.PutUint32(buf, uint32(valLen))
 	}
 	if _, err := w.f.WriteAt(buf, valpos); err != nil {
+		w.scratch.Unlock()
 		w.err = ioerror(err)
 		return w.err
 	}
+	w.scratch.Unlock()
 	return w.err
 }
 
@@ -167,7 +177,9 @@ func (w *Writer) Commit() error {
 	if w.err != nil {
 		return w.err
 	}
-	buf := w.scratch[:12]
+	w.scratch.Lock()
+	defer w.scratch.Unlock()
+	buf := w.scratch.buf[:12]
 	w.committed = true
 	trailer := w.p
 	for i, wi := range w.buckets {

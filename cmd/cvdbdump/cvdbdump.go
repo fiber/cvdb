@@ -12,6 +12,7 @@ func main() {
 	offset := flag.Int64("offset", 0, "offset to use")
 	keysOnly := flag.Bool("keysonly", false, "keys only")
 	noVal := flag.Bool("noval", false, "dont print values")
+	oldMethod := flag.Bool("olditer", false, "use old iterator")
 	flag.Parse()
 	for _, fn := range flag.Args() {
 		opts := cvdb.Options{Offset: *offset}
@@ -20,26 +21,50 @@ func main() {
 			fmt.Fprintf(os.Stderr, "failed to read %v: %v", fn, err)
 			os.Exit(1)
 		}
-		iter := db.Iterator()
-		iter.KeysOnly = *keysOnly
-		for iter.Next() {
-			if *keysOnly {
-				fmt.Printf("%v\n", string(iter.Key()))
-			} else {
-				k := iter.Key()
-				v := iter.Value()
-				ks := string(k)
-				kv := string(v)
-				if *noVal {
-					fmt.Printf("+%v,%v:%v->...(%v bytes)\n", len(k), len(v), ks, len(v))
+		if !*oldMethod {
+			iter := db.Iterator()
+			iter.KeysOnly = *keysOnly
+			for iter.Next() {
+				if *keysOnly {
+					fmt.Printf("%v\n", string(iter.Key()))
 				} else {
-					fmt.Printf("+%v,%v:%v->%v\n", len(k), len(v), ks, kv)
+					k := iter.Key()
+					v := iter.Value()
+					ks := string(k)
+					kv := string(v)
+					if *noVal {
+						fmt.Printf("+%v,%v:%v->...(%v bytes)\n", len(k), len(v), ks, len(v))
+					} else {
+						fmt.Printf("+%v,%v:%v->%v\n", len(k), len(v), ks, kv)
+					}
 				}
 			}
-		}
-		if err := iter.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "dump error %v\n", err)
-			os.Exit(1)
+			if err := iter.Err(); err != nil {
+				fmt.Fprintf(os.Stderr, "dump error %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			iter := db.IdxIterator()
+			iter.KeysOnly = *keysOnly
+			for iter.Next() {
+				if *keysOnly {
+					fmt.Printf("%v\n", string(iter.Key()))
+				} else {
+					k := iter.Key()
+					v := iter.Value()
+					ks := string(k)
+					kv := string(v)
+					if *noVal {
+						fmt.Printf("+%v,%v:%v->...(%v bytes)\n", len(k), len(v), ks, len(v))
+					} else {
+						fmt.Printf("+%v,%v:%v->%v\n", len(k), len(v), ks, kv)
+					}
+				}
+			}
+			if err := iter.Err(); err != nil {
+				fmt.Fprintf(os.Stderr, "dump error %v\n", err)
+				os.Exit(1)
+			}
 		}
 		db.Close()
 	}

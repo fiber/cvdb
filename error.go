@@ -1,6 +1,9 @@
 package cvdb
 
-import "errors"
+import (
+	"errors"
+	"io"
+)
 
 type (
 
@@ -13,14 +16,19 @@ type (
 )
 
 var (
-	errInvalidParams = UserError(errors.New("invalid parameters"))
-	errNotCloser     = UserError(errors.New("writer does not support close method"))
-	errInvalidHeader = DBError(errors.New("invalid db header"))
-	errDBCorrupt     = DBError(errors.New("database is corrupt"))
-	ErrValueTooLarge = UserError(errors.New("attempt to read a very large value from DB"))
+	errInvalidParams      = UserError(errors.New("invalid parameters"))
+	errNotCloser          = UserError(errors.New("writer does not support close method"))
+	errInvalidHeader      = DBError(errors.New("invalid db header"))
+	errDBCorrupt          = DBError(errors.New("database is corrupt"))
+	ErrValueTooLarge      = UserError(errors.New("attempt to read a very large value from DB"))
+	errInvalidKeyLength   = errors.New("invalid key length")
+	errInvalidValueLength = errors.New("invalid value length")
 )
 
 func ioerror(err error) error {
+	if err == io.EOF { // never wrap EOF
+		return err
+	}
 	return IOError(err)
 }
 

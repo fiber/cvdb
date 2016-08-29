@@ -3,6 +3,7 @@ package cvdb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 )
 
@@ -13,6 +14,7 @@ type Iterator2 struct {
 	err      error
 	pos      int64
 	ep       int64
+	advance  bool
 	//
 	kl   int
 	vl   int64
@@ -34,12 +36,13 @@ func (r *Reader) Iterator() *Iterator2 {
 func (it *Iterator2) next(lazy bool) bool {
 	it.lazy = lazy
 	var scratch [16]byte
-	if it.kl > 0 && it.vl > 0 {
+	if it.advance {
 		if it.r.largeValues {
 			it.pos += 12 + int64(it.kl) + it.vl
 		} else {
 			it.pos += 8 + int64(it.kl) + it.vl
 		}
+		it.advance = false
 	}
 	if it.pos >= it.ep {
 		return false
@@ -50,7 +53,9 @@ func (it *Iterator2) next(lazy bool) bool {
 		bs = 12
 	}
 	if _, err := it.r.f.ReadAt(scratch[:bs], it.pos); err != nil {
-		it.err = ioerror(err)
+		if err != io.EOF {
+			it.err = ioerror(err)
+		}
 		return false
 	}
 	kl := binary.LittleEndian.Uint32(scratch[:4])
@@ -60,8 +65,17 @@ func (it *Iterator2) next(lazy bool) bool {
 	} else {
 		vl = binary.LittleEndian.Uint64(scratch[4:])
 	}
+	it.advance = true
 	it.kl = int(kl)
 	it.vl = int64(vl)
+	if it.kl < 0 {
+		it.err = DBError(errInvalidKeyLength)
+		return false
+	}
+	if it.vl < 0 {
+		it.err = DBError(errInvalidValueLength)
+		return false
+	}
 	if lazy {
 		if vl < 2*1024 {
 			it.r.scale(int(kl) + int(vl))
@@ -71,7 +85,7 @@ func (it *Iterator2) next(lazy bool) bool {
 		}
 	} else {
 		if vl > 1<<31 {
-			it.err = ErrValueTooLarge
+			it.err = UserError(fmt.Errorf("%v, (kl is %v, vl is %v, pos is %x)", ErrValueTooLarge, it.kl, it.vl, it.pos))
 			return false
 		}
 		if !it.KeysOnly {
