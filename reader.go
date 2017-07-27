@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"sync/atomic"
 )
 
 type (
@@ -18,6 +19,8 @@ type (
 		buf         []byte
 		cloned      bool
 		largeValues bool
+		refCount    *int32
+		isClosed    bool
 	}
 	hentry struct {
 		pos uint64
@@ -40,7 +43,9 @@ func (r *Reader) Clone() *Reader {
 		f:           r.f,
 		cloned:      true,
 		largeValues: r.largeValues,
+		refCount:    r.refCount,
 	}
+	atomic.AddInt32(r2.refCount, 1)
 	return &r2
 }
 
@@ -50,12 +55,15 @@ func NewReader(f readFile, options *Options) (*Reader, error) {
 	if err := opts.check(options); err != nil {
 		return nil, err
 	}
+	ref := new(int32)
+	*ref = 1
 	r := Reader{
 		f:           f,
 		offset:      opts.Offset,
 		numBuckets:  opts.NumBuckets,
 		hasher:      opts.Hasher,
 		largeValues: opts.LargeValues,
+		refCount:    ref,
 	}
 	r.index = make([]hentry, opts.NumBuckets)
 	buf := make([]byte, opts.NumBuckets*12)
@@ -276,11 +284,16 @@ func (r *posreader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// Close closes the underlying file. If the database was not committed, it will
-// attempt to commit the database before closing the file
+// Close closes the underlying file.
 // It is conventional to call Commit() explicitly before Close()
-// Close should not be called, when the underlying writer does not support Close()
+// Close should not be called, when the underlying reader does not support Close()
 func (r *Reader) Close() error {
+	if r.isClosed {
+		return nil
+	}
+	if atomic.AddInt32(r.refCount, -1) > 0 {
+		return nil
+	}
 	cl, isCloser := r.f.(io.Closer)
 	if isCloser {
 		return cl.Close()

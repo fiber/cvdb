@@ -3,6 +3,7 @@ package cvdb
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,7 +96,7 @@ func TestIterate001(t *testing.T) {
 		}
 		cnt++
 	}
-	if err := iter.Err(); err != nil {
+	if err := iter.Err(); err != nil && err != io.EOF {
 		t.Fatalf("iterator error %v", err)
 	}
 	if cnt != numkeys {
@@ -158,7 +159,7 @@ func TestIterateKeysOnly001(t *testing.T) {
 		}
 		cnt++
 	}
-	if err := iter.Err(); err != nil {
+	if err := iter.Err(); err != nil && err != io.EOF {
 		t.Fatalf("iterator error %v", err)
 	}
 	if cnt != numkeys {
@@ -238,7 +239,7 @@ func TestIterate002(t *testing.T) {
 		}
 		cnt++
 	}
-	if err := iter.Err(); err != nil {
+	if err := iter.Err(); err != nil && err != io.EOF {
 		t.Fatalf("iterator error %v", err)
 	}
 	if cnt != numkeys {

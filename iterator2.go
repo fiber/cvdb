@@ -26,10 +26,11 @@ type Iterator2 struct {
 func (r *Reader) Iterator() *Iterator2 {
 	ep := uint64(0)
 	for _, b := range r.index {
-		if ep == 0 || b.pos < ep {
+		if ep == 0 || b.pos > ep {
 			ep = b.pos
 		}
 	}
+	//fmt.Printf("#WALK: endpos is ep %v\n",ep)
 	return &Iterator2{r: r.Clone(), pos: r.offset + int64(r.numBuckets)*12, ep: int64(ep)}
 }
 
@@ -44,6 +45,8 @@ func (it *Iterator2) next(lazy bool) bool {
 		}
 		it.advance = false
 	}
+
+	//fmt.Printf("#WALK: pos %v ep %v\n",it.pos,it.ep)
 	if it.pos >= it.ep {
 		return false
 	}
