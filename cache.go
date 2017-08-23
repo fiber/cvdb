@@ -179,3 +179,8 @@ func (r *CReader) GetReader(key []byte) (value io.Reader, err error) {
 func (r *CReader) GetHashReader(hash uint32, key []byte) (value io.Reader, err error) {
 	return r.rd.GetHashReader(hash, key)
 }
+
+func (r *CReader) IdxIterator() *Iterator {
+	return r.rd.IdxIterator()
+}
+
