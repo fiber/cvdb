@@ -184,3 +184,6 @@ func (r *CReader) IdxIterator() *Iterator {
 	return r.rd.IdxIterator()
 }
 
+func (r *CReader) Iterator() *Iterator2 {
+	return r.rd.Iterator()
+}
