@@ -26,7 +26,7 @@ type Iterator2 struct {
 func (r *Reader) Iterator() *Iterator2 {
 	ep := uint64(0)
 	for _, b := range r.index {
-		if ep == 0 || b.pos > ep {
+		if ep == 0 || b.pos < ep {
 			ep = b.pos
 		}
 	}
@@ -46,7 +46,7 @@ func (it *Iterator2) next(lazy bool) bool {
 		it.advance = false
 	}
 
-	//fmt.Printf("#WALK: pos %v ep %v\n",it.pos,it.ep)
+	//fmt.Printf("#WALK: pos %v ep %v\n", it.pos, it.ep)
 	if it.pos >= it.ep {
 		return false
 	}
@@ -88,7 +88,7 @@ func (it *Iterator2) next(lazy bool) bool {
 		}
 	} else {
 		if vl > 1<<31 {
-			it.err = UserError(fmt.Errorf("%v, (kl is %v, vl is %v, pos is %x)", ErrValueTooLarge, it.kl, it.vl, it.pos))
+			it.err = UserError(fmt.Errorf("%v, (kl is %v, vl is %v, pos is %d)", ErrValueTooLarge, it.kl, it.vl, it.pos))
 			return false
 		}
 		if !it.KeysOnly {

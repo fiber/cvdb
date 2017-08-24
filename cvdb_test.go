@@ -214,7 +214,7 @@ func TestRead002(t *testing.T) {
 		}
 	}
 	dura := time.Since(tstart)
-	fmt.Printf("read  %v keys in %v (%v/key) (time to first read %v)\n", numkeys, dura, dura/numkeys, tfirst)
+	fmt.Printf("read %v keys in %v (%v/key) (time to first read %v)\n", numkeys, dura, dura/numkeys, tfirst)
 	db.Close()
 }
 
