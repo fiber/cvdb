@@ -130,7 +130,7 @@ func (c *Cache) Open(fname string) (*CReader, error) {
 }
 
 func (cr *CReader) Close() error {
-	if cr.isClosed {
+	if cr==nil || cr.isClosed {
 		return nil
 	}
 	cr.isClosed = true
