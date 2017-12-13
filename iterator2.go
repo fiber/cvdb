@@ -26,7 +26,7 @@ type Iterator2 struct {
 func (r *Reader) Iterator() *Iterator2 {
 	ep := uint64(0)
 	for _, b := range r.index {
-		if ep == 0 || b.pos < ep {
+		if ep == 0 || (b.pos != 0 && b.pos < ep) {
 			ep = b.pos
 		}
 	}
