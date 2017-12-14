@@ -12,7 +12,20 @@ type (
 		entries map[string]*CacheEntry
 		serial  uint64
 		target  int
+		stats   Statistics
 		sync.Mutex
+	}
+	Statistics struct {
+		Opens           uint64 // open call count
+		Hits            uint64 // file present in cache
+		Misses          uint64 // file not present in cache
+		MissesOpts      uint64 // file present in cache has different options
+		Fails           uint64 // error opening file
+		Removed         uint64 // removed from cache
+		Invalidate      uint64 // invalidate calls
+		InvalidateFails uint64 // invalidate calls with invalid file name
+		Closes          uint64 // close call count
+		ClosesToZero    uint64 // final close call count
 	}
 	CacheEntry struct {
 		Reader *Reader
@@ -28,6 +41,21 @@ type (
 	}
 )
 
+func (c *Cache) Statistics() Statistics {
+	return Statistics{
+		Opens:           atomic.LoadUint64(&c.stats.Opens),
+		Hits:            atomic.LoadUint64(&c.stats.Hits),
+		Misses:          atomic.LoadUint64(&c.stats.Misses),
+		MissesOpts:      atomic.LoadUint64(&c.stats.MissesOpts),
+		Fails:           atomic.LoadUint64(&c.stats.Fails),
+		Removed:         atomic.LoadUint64(&c.stats.Removed),
+		Invalidate:      atomic.LoadUint64(&c.stats.Invalidate),
+		InvalidateFails: atomic.LoadUint64(&c.stats.InvalidateFails),
+		Closes:          atomic.LoadUint64(&c.stats.Closes),
+		ClosesToZero:    atomic.LoadUint64(&c.stats.ClosesToZero),
+	}
+}
+
 func NewCache(target int) *Cache {
 	return &Cache{target: target, entries: make(map[string]*CacheEntry)}
 }
@@ -41,6 +69,7 @@ func eqOptions(o1, o2 *Options) bool {
 
 func (c *Cache) OpenOpts(fname string, opts *Options) (*CReader, error) {
 	sn := atomic.AddUint64(&c.serial, 1)
+	atomic.AddUint64(&c.stats.Opens, 1)
 	fn, err := filepath.Abs(fname)
 	if err != nil {
 		return nil, err
@@ -54,6 +83,8 @@ func (c *Cache) OpenOpts(fname string, opts *Options) (*CReader, error) {
 			if err != nil {
 				return nil, err
 			}
+			atomic.AddUint64(&c.stats.Misses, 1)
+			atomic.AddUint64(&c.stats.MissesOpts, 1)
 			return &CReader{rd: f}, nil
 		}
 		cr := &CReader{
@@ -63,6 +94,7 @@ func (c *Cache) OpenOpts(fname string, opts *Options) (*CReader, error) {
 		}
 		atomic.AddInt32(&e.refCount, 1)
 		atomic.StoreUint64(&e.serial, sn)
+		atomic.AddUint64(&c.stats.Hits, 1)
 		return cr, nil
 	}
 	for len(c.entries) > c.target {
@@ -85,11 +117,14 @@ func (c *Cache) OpenOpts(fname string, opts *Options) (*CReader, error) {
 			break
 		}
 		delete(c.entries, fd)
+		atomic.AddUint64(&c.stats.Removed, 1)
 		defer ed.Reader.Close()
 	}
+	atomic.AddUint64(&c.stats.Misses, 1)
 	rd, err := OpenOpts(fn, opts)
 	if err != nil {
 		c.Unlock()
+		atomic.AddUint64(&c.stats.Fails, 1)
 		return nil, err
 	}
 	ce := &CacheEntry{
@@ -111,8 +146,10 @@ func (c *Cache) OpenOpts(fname string, opts *Options) (*CReader, error) {
 func (c *Cache) Invalidate(fname string) {
 	fn, err := filepath.Abs(fname)
 	if err != nil {
+		atomic.AddUint64(&c.stats.InvalidateFails, 1)
 		return
 	}
+	atomic.AddUint64(&c.stats.Invalidate, 1)
 	c.Lock()
 	e, ok := c.entries[fn]
 	if !ok {
@@ -130,12 +167,19 @@ func (c *Cache) Open(fname string) (*CReader, error) {
 }
 
 func (cr *CReader) Close() error {
-	if cr==nil || cr.isClosed {
+	if cr == nil || cr.isClosed {
 		return nil
+	}
+	if cr.c != nil {
+		atomic.AddUint64(&cr.c.stats.Closes, 1)
 	}
 	cr.isClosed = true
 	if cr.e != nil {
-		atomic.AddInt32(&cr.e.refCount, -1)
+		if atomic.AddInt32(&cr.e.refCount, -1) == 0 {
+			if cr.c != nil {
+				atomic.AddUint64(&cr.c.stats.ClosesToZero, 1)
+			}
+		}
 	}
 	return cr.rd.Close()
 }
