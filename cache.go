@@ -60,6 +60,10 @@ func NewCache(target int) *Cache {
 	return &Cache{target: target, entries: make(map[string]*CacheEntry)}
 }
 
+func (cache *Cache) SetTarget(size int) {
+	cache.target = size
+}
+
 func eqOptions(o1, o2 *Options) bool {
 	if o1 == nil || o2 == nil {
 		return o2 == o1

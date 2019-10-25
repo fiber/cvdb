@@ -4,27 +4,28 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
+	"sync/atomic"
+
 	"sync"
 )
 
 type (
 	Writer struct {
-		buckets    [][]cell
-		hasher     Hasher
-		f          writeFile
-		p          int64 // current position in stream
-		offset     int64 // offset to add when seeking
-		committed  bool
-		numBuckets uint32
-		err        error
-		scratch    struct {
-			buf [16]byte
-			sync.Mutex
-		}
+		buckets     [][]cell
+		hasher      Hasher
+		f           writeFile
+		p           int64 // current position in stream
+		offset      int64 // offset to add when seeking
+		committed   bool
+		numBuckets  uint32
+		err         error
+		scratch     [16]byte
 		skipped     int64
 		largeValues bool // support values larger than 4GB
 		dumpDistrib bool
+		wLock       sync.Mutex // write ops
 	}
 	cell struct {
 		hash uint32
@@ -32,6 +33,7 @@ type (
 	}
 	writeFile interface {
 		WriteAt(b []byte, off int64) (n int, err error)
+		ReadAt(b []byte, off int64) (n int, err error)
 	}
 )
 
@@ -48,6 +50,10 @@ func NewWriter(f writeFile, options *Options) (*Writer, error) {
 		p:           int64(opts.NumBuckets)*12 + opts.Offset,
 		hasher:      opts.Hasher,
 		largeValues: opts.LargeValues,
+	}
+	rate := atomic.LoadUint64(&profileRate)
+	if rate > 0 && (rate == 1 || rand.Int63n(int64(rate)) == 0) {
+		cvdbProfile.Add(&w, 0)
 	}
 	return &w, nil
 }
@@ -71,89 +77,152 @@ func CreateOpts(fname string, opts *Options) (*Writer, error) {
 
 // Put puts a key and value into the file
 func (w *Writer) Put(key, value []byte) error {
+	_, err := w.PutFP(key, value)
+	return err
+}
+
+func (w *Writer) PutFP(key, value []byte) (FPos, error) {
 	hash := w.hasher.Hash(key)
-	return w.PutHash(hash, key, value)
+	return w.PutHashFP(hash, key, value)
 }
 
 func (w *Writer) PutReader(key []byte, valueR io.Reader) error {
-	hash := w.hasher.Hash(key)
-	return w.PutHashReader(hash, key, valueR)
+	_, err := w.PutReaderFP(key, valueR)
+	return err
 }
 
-func (w *Writer) putHashStart(hash uint32, key []byte, valuelen int) error {
+func (w *Writer) PutReaderFP(key []byte, valueR io.Reader) (FPos, error) {
+	hash := w.hasher.Hash(key)
+	return w.PutHashReaderFP(hash, key, valueR)
+}
+
+func (w *Writer) putHashStart(hash uint32, key []byte, valuelen int) (FPos, error) {
+	var fpos FPos
 	if w.err != nil {
-		return w.err
+		return fpos, w.err
 	}
 	const keyLen = 4
 	b := cell{hash: hash, pos: uint64(w.p)}
 	bucket := hash % w.numBuckets
-	w.buckets[bucket] = append(w.buckets[bucket], b)
+	if int(bucket) < len(w.buckets) {
+		w.buckets[bucket] = append(w.buckets[bucket], b)
+	} else {
+		panic(fmt.Sprintf("bucket is %v, len is %v, hash is %x", bucket, len(w.buckets), hash))
+	}
 	var buf []byte
-	w.scratch.Lock()
 	if w.largeValues {
-		buf = w.scratch.buf[:12]
+		buf = w.scratch[:12]
 		binary.LittleEndian.PutUint32(buf, uint32(len(key)))
 		binary.LittleEndian.PutUint64(buf[keyLen:], uint64(valuelen))
 	} else {
-		buf = w.scratch.buf[:8]
+		buf = w.scratch[:8]
 		binary.LittleEndian.PutUint32(buf, uint32(len(key)))
 		binary.LittleEndian.PutUint32(buf[keyLen:], uint32(valuelen))
 	}
+	fpos.hdrLen = len(buf)
 	if _, err := w.f.WriteAt(buf, w.p); err != nil {
-		w.scratch.Unlock()
 		w.err = ioerror(err)
-		return err
+		return fpos, err
 	}
-	w.scratch.Unlock()
 	w.p += int64(len(buf))
+	fpos.keyPos = w.p
 	if _, err := w.f.WriteAt(key, w.p); err != nil {
 		w.err = ioerror(err)
-		return err
+		return fpos, err
 	}
 	w.p += int64(len(key))
-	return nil
+	return fpos, nil
+}
+
+type FPos struct {
+	hdrLen int
+	keyPos int64
+	valPos int64
+	valLen int64
+}
+
+func (fp *FPos) ValLen() int64 {
+	return fp.valLen
+}
+func (fp *FPos) ValPos() int64 {
+	return fp.valPos
+}
+func (fp *FPos) KeyPos() int64 {
+	return fp.keyPos
+}
+func (fp *FPos) KeyLen() int {
+	return int(fp.valPos - fp.keyPos)
+}
+func (fp *FPos) HkvPos() int64 {
+	return fp.keyPos - int64(fp.hdrLen)
+}
+func (w *Writer) ReadBack(fp FPos) io.Reader {
+	rdr := posreader{r: w.f, pos: fp.valPos, len: fp.valLen}
+	return &rdr
 }
 
 // PutHash writes key and value to the stream but uses an already precomputed hash value
 func (w *Writer) PutHash(hash uint32, key, value []byte) error {
-	if err := w.putHashStart(hash, key, len(value)); err != nil {
-		return err
+	_, err := w.PutHashFP(hash, key, value)
+	return err
+}
+
+func (w *Writer) PutHashFP(hash uint32, key, value []byte) (FPos, error) {
+	w.wLock.Lock()
+	fpos, err := w.putHashStart(hash, key, len(value))
+	if err != nil {
+		w.wLock.Unlock()
+		return fpos, err
 	}
-	if _, err := w.f.WriteAt(value, w.p); err != nil {
+	_, err = w.f.WriteAt(value, w.p)
+	w.wLock.Unlock()
+	if err != nil {
 		w.err = ioerror(err)
-		return err
+		return fpos, err
 	}
+	fpos.valPos = w.p
+	fpos.valLen = int64(len(value))
 	w.p += int64(len(value))
-	return w.err
+	return fpos, w.err
 }
 
 func (w *Writer) PutHashReader(hash uint32, key []byte, valueR io.Reader) error {
+	_, err := w.PutHashReaderFP(hash, key, valueR)
+	return err
+}
+
+func (w *Writer) PutHashReaderFP(hash uint32, key []byte, valueR io.Reader) (FPos, error) {
 	valpos := w.p + 4
-	if err := w.putHashStart(hash, key, 0); err != nil {
-		return err
+	w.wLock.Lock()
+	fpos, err := w.putHashStart(hash, key, 0)
+	if err != nil {
+		w.wLock.Unlock()
+		return fpos, err
 	}
+	fpos.valPos = w.p
 	valLen, err := io.Copy(poswriter(w, w.p), valueR)
+	fpos.valLen = valLen
 	if err != nil {
 		w.err = ioerror(err)
-		return w.err
+		w.wLock.Unlock()
+		return fpos, w.err
 	}
 	w.p += valLen
 	var buf []byte
-	w.scratch.Lock()
 	if w.largeValues {
-		buf = w.scratch.buf[:8]
+		buf = w.scratch[:8]
 		binary.LittleEndian.PutUint64(buf, uint64(valLen))
 	} else {
-		buf = w.scratch.buf[:4]
+		buf = w.scratch[:4]
 		binary.LittleEndian.PutUint32(buf, uint32(valLen))
 	}
-	if _, err := w.f.WriteAt(buf, valpos); err != nil {
-		w.scratch.Unlock()
+	_, err = w.f.WriteAt(buf, valpos)
+	w.wLock.Unlock()
+	if err != nil {
 		w.err = ioerror(err)
-		return w.err
+		return fpos, w.err
 	}
-	w.scratch.Unlock()
-	return w.err
+	return fpos, w.err
 }
 
 type posWriter struct {
@@ -177,9 +246,9 @@ func (w *Writer) Commit() error {
 	if w.err != nil {
 		return w.err
 	}
-	w.scratch.Lock()
-	defer w.scratch.Unlock()
-	buf := w.scratch.buf[:12]
+	w.wLock.Lock()
+	defer w.wLock.Unlock()
+	buf := w.scratch[:12]
 	w.committed = true
 	trailer := w.p
 	for i, wi := range w.buckets {
@@ -245,6 +314,7 @@ func (w *Writer) Commit() error {
 // It is conventional to call Commit() explicitly before Close()
 // Close should not be called, when the underlying writer does not support Close()
 func (w *Writer) Close() error {
+	cvdbProfile.Remove(w)
 	cl, isCloser := w.f.(io.Closer)
 	if !w.committed {
 		if err := w.Commit(); err != nil {

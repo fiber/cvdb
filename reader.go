@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"math/rand"
 	"os"
+	"runtime/pprof"
 	"sync/atomic"
 )
 
@@ -54,6 +56,7 @@ func NewReader(f readFile, options *Options) (*Reader, error) {
 	var opts Options
 	if err := opts.check(options); err != nil {
 		return nil, err
+
 	}
 	ref := new(int32)
 	*ref = 1
@@ -81,12 +84,29 @@ func NewReader(f readFile, options *Options) (*Reader, error) {
 			len: binary.LittleEndian.Uint32(buf[p+8:]),
 		}
 	}
+	rate := atomic.LoadUint64(&profileRate)
+	if rate > 0 && (rate == 1 || rand.Int63n(int64(rate)) == 0) {
+		cvdbProfile.Add(&r, 0)
+	}
 	return &r, nil
 }
 
 // Open opens a database file
 func Open(fname string) (*Reader, error) {
 	return OpenOpts(fname, nil)
+}
+
+var (
+	cvdbProfile = pprof.NewProfile("cvdb")
+	profileRate uint64
+)
+
+func SetProfileRate(rate int) int {
+	old := int(atomic.LoadUint64(&profileRate))
+	if rate >= 0 {
+		atomic.StoreUint64(&profileRate, uint64(rate))
+	}
+	return old
 }
 
 func OpenOpts(fname string, opts *Options) (*Reader, error) {
@@ -260,14 +280,17 @@ func (r *Reader) GetHashReader(hash uint32, key []byte) (value io.Reader, err er
 	return posReader(r, kv.pos, kv.vl), nil
 }
 
+type ReadAter interface {
+	ReadAt(b []byte, off int64) (n int, err error)
+}
 type posreader struct {
-	r   *Reader
+	r   ReadAter
 	pos int64
 	len int64
 }
 
 func posReader(r *Reader, pos int64, len int64) *posreader {
-	return &posreader{r: r, pos: pos, len: len}
+	return &posreader{r: r.f, pos: pos, len: len}
 }
 
 func (r *posreader) Read(b []byte) (int, error) {
@@ -278,7 +301,7 @@ func (r *posreader) Read(b []byte) (int, error) {
 	if r.len < int64(m) {
 		b = b[:int(r.len)]
 	}
-	n, err := r.r.f.ReadAt(b, r.pos)
+	n, err := r.r.ReadAt(b, r.pos)
 	r.pos += int64(n)
 	r.len -= int64(n)
 	return n, err
@@ -291,6 +314,8 @@ func (r *Reader) Close() error {
 	if r.isClosed {
 		return nil
 	}
+	cvdbProfile.Remove(r.f)
+
 	if atomic.AddInt32(r.refCount, -1) > 0 {
 		return nil
 	}
